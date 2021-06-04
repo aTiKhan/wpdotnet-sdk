@@ -1,8 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Composition.Hosting;
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
-using PeachPied.WordPress.Sdk;
+using PeachPied.WordPress.Standard;
 
 namespace PeachPied.WordPress.AspNetCore
 {
@@ -34,6 +35,54 @@ namespace PeachPied.WordPress.AspNetCore
         /// a unique prefix. Only numbers, letters, and underscores please!
         /// </remarks>
         public string DbTablePrefix { get; set; } = "wp_";
+
+        /// <summary>
+        /// Controls the <c>WP_SITEURL</c> configuration constant.
+        /// The value defined is the address where your WordPress core files reside. It should include the http:// part too. Do not put a slash “/” at the end.
+        /// </summary>
+        public string SiteUrl
+        {
+            get => _siteUrl;
+            set
+            {
+                if (!string.IsNullOrEmpty(value))
+                {
+                    if (!value.StartsWith("http"))
+                        throw new ArgumentException("SiteUrl must start with http:// or https://.");
+                    if (value.EndsWith('/'))
+                        throw new ArgumentException("SiteUrl must not have trailing slash.");
+                }
+
+                _siteUrl = value;
+            }
+        }
+
+        private string _siteUrl;
+
+        /// <summary>
+        /// Controls the <c>WP_HOME</c> configuration constant.
+        /// Represents the address you want people to type in their browser to reach the WordPress blog.
+        /// It should include the http:// part and should not have a slash “/” at the end.
+        /// Adding this in can reduce the number of database calls when loading the site.
+        /// </summary>
+        public string HomeUrl
+        {
+            get => _homeUrl;
+            set
+            {
+                if (!string.IsNullOrEmpty(value))
+                {
+                    if (!value.StartsWith("http"))
+                        throw new ArgumentException("HomeUrl must start with http:// or https://.");
+                    if (value.EndsWith('/'))
+                        throw new ArgumentException("HomeUrl must not have trailing slash.");
+                }
+
+                _homeUrl = value;
+            }
+        }
+
+        private string _homeUrl;
 
         // SALT:
 
@@ -92,6 +141,17 @@ namespace PeachPied.WordPress.AspNetCore
         /// Enumeration of assembly names with compiled PHP plugins, themes or other additions.
         /// These assemblies will be loaded, treated as PHP assemblies containing script files and will be loaded into the entire application context.
         /// </summary>
-        public IEnumerable<string> LegacyPluginAssemblies { get; set; }
+        public List<string> LegacyPluginAssemblies { get; set; }
+
+        /// <summary>
+        /// Collection of .NET plugins implemented as <see cref="IWpPlugin"/>.
+        /// </summary>
+        public WpPluginContainer PluginContainer { get; } = new WpPluginContainer();
+
+        /// <summary>
+        /// MEF composition container.
+        /// Will be used to import <see cref="IWpPluginProvider"/> parts.
+        /// </summary>
+        public ContainerConfiguration CompositionContainers { get; } = new ContainerConfiguration();
     }
 }

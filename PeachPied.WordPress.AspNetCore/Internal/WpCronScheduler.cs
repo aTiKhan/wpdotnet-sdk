@@ -13,18 +13,19 @@ namespace PeachPied.WordPress.AspNetCore.Internal
     // simple background scheduler that invokes wp-cron.php in specified interval.
     sealed class WpCronScheduler
     {
-        public TimeSpan Interval { get; private set; }
+        public TimeSpan Interval { get; }
 
-        public Action<Context> Startup { get; private set; }
+        public Action<Context> Startup { get; }
 
-        static string ScriptPath = "wp-cron.php";
+        public string RootPath { get; }
 
         readonly CancellationTokenSource _cancel = new CancellationTokenSource();
 
-        public WpCronScheduler(Action<Context> startup, TimeSpan interval)
+        public WpCronScheduler(Action<Context> startup, TimeSpan interval, string rootpath)
         {
             this.Interval = interval;
             this.Startup = startup;
+            this.RootPath = rootpath;
         }
 
         void ExecuteAsync()
@@ -33,8 +34,10 @@ namespace PeachPied.WordPress.AspNetCore.Internal
             {
                 using (var ctx = Context.CreateEmpty())
                 {
+                    ctx.RootPath = ctx.WorkingDirectory = RootPath;        // wordpress content files location
                     Startup(ctx);                   // sets the settings constants
-                    ctx.Include(null, ScriptPath);  // include 'wp-cron.php'
+                    ctx.Include("", "wp-load.php", once: true); // include 'wp-load.php'
+                    ctx.Include("", "wp-cron.php");             // include 'wp-cron.php'
                 }
             }
             catch
@@ -48,9 +51,9 @@ namespace PeachPied.WordPress.AspNetCore.Internal
             _cancel.Cancel();
         }
 
-        public static void StartScheduler(Action<Context> startup, TimeSpan interval)
+        public static void StartScheduler(Action<Context> startup, TimeSpan interval, string rootpath)
         {
-            var scheduler = new WpCronScheduler(startup, interval);
+            var scheduler = new WpCronScheduler(startup, interval, rootpath);
             scheduler.Start();
         }
 

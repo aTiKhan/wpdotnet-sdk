@@ -1,0 +1,48 @@
+<Project>
+
+  <!--
+    This project file is used to build a PHP plugin for WordPress using
+    Sdk="PeachPied.WordPress.Build.Plugin" from sources.
+  -->
+
+  <PropertyGroup>
+    <!-- tells the Sdk to reference WordPress from source as well -->
+    <WpDotNetVersion>current</WpDotNetVersion>
+    <BuildPlugin>PeachPied.WordPress.Build.Plugin</BuildPlugin>
+  </PropertyGroup>
+
+  <!-- Sdk PeachPied.WordPress.Build.Plugin  -->
+  <Import Project="$(MSBuildThisFileDirectory)../$(BuildPlugin)/Sdk/Sdk.props" />
+
+  <!-- copy the task dll into temp dir (TODO: AppDomain and shadow copy) -->
+  <PropertyGroup>
+    <BuildPluginFramework Condition=" '$(MSBuildRuntimeType)'!='Core' ">net472</BuildPluginFramework>
+    <BuildPluginFramework Condition=" '$(BuildPluginFramework)'=='' ">netcoreapp2.1</BuildPluginFramework>
+    <BuildPluginTaskAssembly>$(MSBuildThisFileDirectory)../$(BuildPlugin)/bin/$(Configuration)/$(BuildPluginFramework)/publish/$(BuildPlugin).dll</BuildPluginTaskAssembly>
+    <BuildPluginTaskAssemblyOriginal>$(BuildPluginTaskAssembly)</BuildPluginTaskAssemblyOriginal>
+    <_BuildPluginTmp>$([System.IO.Path]::GetTempPath())PhpPlugin.Build/$([System.Guid]::NewGuid())/</_BuildPluginTmp>
+    <BuildPluginTaskAssembly>$(_BuildPluginTmp)$(BuildPlugin).dll</BuildPluginTaskAssembly>
+  </PropertyGroup>
+
+  <!-- ensure PeachPied.WordPress.Build.Plugin us built -->
+  <Target Name="BuildPluginTaskAssembly" BeforeTargets="CopyBuildPluginTaskAssembly">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../$(BuildPlugin)/$(BuildPlugin).csproj" Targets="Restore" Properties="TargetFramework=$(BuildPluginFramework)" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)../$(BuildPlugin)/$(BuildPlugin).csproj" Targets="Publish" Properties="TargetFramework=$(BuildPluginFramework);IsPackable=false;" />
+  </Target>
+
+  <!-- try to cleanup previous tmp files and copy new build output -->
+  <Target Name="CopyBuildPluginTaskAssembly" BeforeTargets="WpPropertiesCore" >
+    <ItemGroup>
+      <_FilesToDelete Include="$(_BuildPluginTmp)../**/*"/>
+      <_DirsToDelete Include="$([System.IO.Directory]::GetDirectories(&quot;$(_BuildPluginTmp)..&quot;))" Condition=" Exists('$(_BuildPluginTmp)..') "/>
+      <_CopyItems Include="$(BuildPluginTaskAssemblyOriginal)/../*.*" />
+    </ItemGroup>
+    <Delete Files="@(_FilesToDelete)" ContinueOnError="true" />
+    <RemoveDir Directories="@(_DirsToDelete)" ContinueOnError="true" />
+    <Copy SourceFiles="@(_CopyItems)" DestinationFolder="$(_BuildPluginTmp)" />
+  </Target>
+
+  <!-- Sdk PeachPied.WordPress.Build.Plugin  -->
+  <Import Project="$(MSBuildThisFileDirectory)../$(BuildPlugin)/Sdk/Sdk.targets" />
+
+</Project>

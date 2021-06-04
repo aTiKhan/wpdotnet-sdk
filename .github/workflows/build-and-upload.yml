@@ -1,0 +1,31 @@
+name: .NET Core
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    env:
+      version: 1.0.0-gh${{github.run_number}}
+      configuration: Release
+    
+    steps:
+    - uses: actions/checkout@v2
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: 5.0.101
+    - name: Build
+      run: dotnet build -c ${{env.configuration}} -p:Version=${{env.version}}
+      
+#    - name: Upload artifacts
+#      uses: actions/upload-artifact@v1.0.0
+#      with:
+#        name: packages
+#        path: output

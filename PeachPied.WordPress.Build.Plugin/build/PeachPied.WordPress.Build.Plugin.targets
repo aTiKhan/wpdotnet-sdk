@@ -1,0 +1,112 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <PropertyGroup>
+    <MSBuildAllProjects Condition="'$(MSBuildToolsVersion)' != 'Current'">$(MSBuildAllProjects);$(MsBuildThisFileFullPath)</MSBuildAllProjects>
+  </PropertyGroup>
+
+  <!-- ProjectCapability -->
+  <ItemGroup>
+    <ProjectCapability Include="WpDotNetPlugin;" />
+  </ItemGroup>
+
+  <!-- WpSlug is a WordPress slug id - the identifier for plugins and themes, same as plugin folder, must be consistent -->
+  <PropertyGroup>
+    <WpSlug Condition=" '$(WpSlug)'=='' ">$(AssemblyName)</WpSlug>
+  </PropertyGroup>
+
+  <!-- load task processing wp plugins/themes -->
+  <!-- use netstandard2.0 for full .NET just in case -->
+
+  <PropertyGroup Condition=" '$(BuildPluginTaskAssembly)'=='' ">
+    <BuildPluginTaskAssembly Condition="'$(MSBuildRuntimeType)' != 'Core'">$(MSBuildThisFileDirectory)netstandard2.0\PeachPied.WordPress.Build.Plugin.dll</BuildPluginTaskAssembly>
+    <BuildPluginTaskAssembly Condition="'$(MSBuildRuntimeType)' == 'Core'">$(MSBuildThisFileDirectory)netcoreapp2.1\PeachPied.WordPress.Build.Plugin.dll</BuildPluginTaskAssembly>
+  </PropertyGroup>
+
+  <UsingTask AssemblyFile="$(BuildPluginTaskAssembly)" TaskName="WpPluginTask" />
+
+  <Target Name="WpPropertiesCore">
+    <WpPluginTask
+      ProjectPath="$(MSBuildProjectDirectory)"
+      WpContentTarget="$(WpContentTarget)"
+      VersionSuffix="$(VersionSuffix)"
+      Title="$(Title)"
+      WpSlug="$(WpSlug)"
+      >
+      <Output TaskParameter="Version" PropertyName="wpVersion" />
+      <Output TaskParameter="PackageProjectUrl" PropertyName="PackageProjectUrl" />
+      <Output TaskParameter="PackageTags" PropertyName="PackageTags" />
+      <Output TaskParameter="Authors" PropertyName="Authors" />
+      <Output TaskParameter="Title" PropertyName="Title" />
+      <Output TaskParameter="Description" PropertyName="PackageDescription" />
+    </WpPluginTask>
+  </Target>
+
+  <Target Name="WpPropertiesResolve"
+          Condition=" '$(WpContentTarget)'!='' "
+          DependsOnTargets="WpPropertiesCore;ComposerResolve"
+          BeforeTargets="GenerateNuspec;CollectPackageReferences">
+    <PropertyGroup>
+      <!-- package id, restore values changed by composer.json -->
+      <Version Condition=" '$(wpVersion)' != '' ">$(wpVersion)</Version>
+      <PackageVersion>$(Version)</PackageVersion>
+      <Copyright>$(Authors)</Copyright>
+      <PackageTags>$(PackageTags),wpdotnet-$(WpContentTarget)-$(WpDotNetVersion)</PackageTags>
+      <!-- PackageType must be set do "Dependency" only so it won't get rejected by VS NuGet Gallery -->
+      <!-- PackageType>Dependency;wpdotnet-$(WpContentTarget),0.9.990.0</PackageType -->
+      <PackageLicenseExpression Condition=" '$(PackageLicenseExpression)'=='' ">GPL-2.0-or-later</PackageLicenseExpression>
+    </PropertyGroup>
+
+    <!-- report properties to the hub -->
+    <Message Text="[wpdotnet] PackageId = $(PackageId)" Importance="high" />
+    <Message Text="[wpdotnet] PackageIconUrl = $(PackageIconUrl)" Importance="high" />
+    <Message Text="[wpdotnet] PackageVersion = $(PackageVersion)" Importance="high" />
+    <Message Text="[wpdotnet] PackageProjectUrl = $(PackageProjectUrl)" Importance="high" />
+    <Message Text="[wpdotnet] PackageTags = $(PackageTags)" Importance="high" />
+    <Message Text="[wpdotnet] Title = $(Title)" Importance="high" />
+    <Message Text="[wpdotnet] Authors = $(Authors)" Importance="high" />
+
+    <!-- error checks -->
+    <Error Text="Not a valid plugin. Missing 'version' header." Condition=" '$(WpContentTarget)'=='plugins' AND '$(wpVersion)'=='' " />
+    <!--Error Text="Not a valid theme. Missing a screenshot file." Condition=" '$(WpContentTarget)'=='themes' AND '$(PackageIconUrl)'=='' " /-->
+    <Error Text="Not a valid theme. Missing 'Title' metadata." Condition=" '$(WpContentTarget)'=='themes' AND '$(Title)'=='' " />
+  </Target>
+
+  <!-- where are the file physically placed within the wordpress installation -->
+  <PropertyGroup Condition=" '$(WpContentTarget)'!='' ">
+    <PhpRelativePath Condition=" '$(PhpRelativePath)'=='' and '$(WpContentTarget)'=='mu-plugins' ">wp-content/$(WpContentTarget)/</PhpRelativePath>
+    <PhpRelativePath Condition=" '$(PhpRelativePath)'=='' ">wp-content/$(WpContentTarget)/$(WpSlug)/</PhpRelativePath>
+  </PropertyGroup>
+
+  <ItemGroup Condition=" '$(PhpRelativePath)'!='' ">
+
+    <ProjectReference Include="$(MSBuildThisFileDirectory)../../wordpress/PeachPied.WordPress.msbuildproj" Private="false" Condition=" '$(WpDotNetVersion)'=='current' " />
+    <PackageReference Include="PeachPied.WordPress" Version="[$(WpDotNetVersion)]" Condition=" '$(WpDotNetVersion)'!='current' " ExcludeAssets="contentFiles" />
+
+    <!-- include plugin files as contentFiles -->
+    <Content Update="**" CopyToOutputDirectory="PreserveNewest">
+      <PackagePath>contentFiles/any/netcoreapp3.0/wordpress/$(PhpRelativePath)</PackagePath>
+      <PackageCopyToOutput>true</PackageCopyToOutput>
+      <Link>wordpress\$(PhpRelativePath)%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </Content>
+
+    <!-- icon asset -->
+    <!--None Include="$(PackageIconPath)" Pack="true" PackagePath="$(PackageIcon)" Condition=" Exists('$(PackageIconPath)') "/-->
+
+    <!--
+      Peachpie.NET.Sdk adds all files into <None> items,
+      if not excluded by user, we'll pack them into assets/ folder.
+      We don't add it to the root of the package, since it would be opened by Visual Studio upon package restore.
+      
+      There is a proposal to specify this information in nuspec https://github.com/NuGet/Home/wiki/Packaging-Documentation-within-the-nupkg
+     -->
+     
+    <!-- assets files -> assets/** -->
+    <None Update="readme.md;readme.txt" Pack="true">
+      <PackagePath>assets</PackagePath>
+      <PackageCopyToOutput>true</PackageCopyToOutput>
+      <Link>assets/%(Filename)%(Extension)</Link>
+    </None>
+  </ItemGroup>
+
+</Project>

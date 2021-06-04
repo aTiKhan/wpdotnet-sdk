@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -12,11 +13,12 @@ using Microsoft.AspNetCore.Rewrite;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Options;
 using Pchp.Core;
 using Peachpie.AspNetCore.Web;
 using PeachPied.WordPress.AspNetCore;
 using PeachPied.WordPress.AspNetCore.Internal;
-using PeachPied.WordPress.Sdk;
+using PeachPied.WordPress.Standard;
 
 namespace Microsoft.AspNetCore.Builder
 {
@@ -30,7 +32,7 @@ namespace Microsoft.AspNetCore.Builder
         {
             var req = context.HttpContext.Request;
             var subpath = req.Path.Value;
-            if (subpath != "/")
+            if (subpath != "/" && subpath.Length != 0)
             {
                 if (subpath.IndexOf("wp-content/", StringComparison.Ordinal) != -1 ||   // it is in the wp-content -> definitely a file
                     files.GetFileInfo(subpath).Exists ||                            // the script is in the file system
@@ -82,6 +84,16 @@ namespace Microsoft.AspNetCore.Builder
             ctx.DefineConstant("LOGGED_IN_SALT", (PhpValue)config.SALT.LOGGED_IN_SALT);
             ctx.DefineConstant("NONCE_SALT", (PhpValue)config.SALT.NONCE_SALT);
 
+            if (!string.IsNullOrEmpty(config.SiteUrl))
+            {
+                ctx.DefineConstant("WP_SITEURL", config.SiteUrl);
+            }
+
+            if (!string.IsNullOrEmpty(config.HomeUrl))
+            {
+                ctx.DefineConstant("WP_HOME", config.HomeUrl);
+            }
+
             // Additional constants
             if (config.Constants != null)
             {
@@ -93,19 +105,22 @@ namespace Microsoft.AspNetCore.Builder
 
             // $peachpie-wp-loader : WpLoader
             ctx.Globals["peachpie_wp_loader"] = PhpValue.FromClass(loader);
-        }
 
-        /// <summary>Class <see cref="WP"/> is compiled in PHP assembly <c>Peachpied.WordPress.dll</c>.</summary>
-        static string WordPressAssemblyName => typeof(WP).Assembly.FullName;
+            // workaround HTTPS under proxy,
+            // set $_SERVER['HTTPS'] = 'on'
+            // https://wordpress.org/support/article/administration-over-ssl/#using-a-reverse-proxy
+            if (ctx.IsWebApplication && ctx.GetHttpContext().Request.Headers["X-Forwarded-Proto"] == "https")
+            {
+                ctx.Server["HTTPS"] = "on";
+            }
+        }
 
         /// <summary>
         /// Installs WordPress middleware.
         /// </summary>
         /// <param name="app">The application builder.</param>
-        /// <param name="config">WordPress instance configuration.</param>
-        /// <param name="plugins">Container describing what plugins will be loaded.</param>
         /// <param name="path">Physical location of wordpress folder. Can be absolute or relative to the current directory.</param>
-        public static IApplicationBuilder UseWordPress(this IApplicationBuilder app, WordPressConfig config = null, WpPluginContainer plugins = null, string path = null)
+        public static IApplicationBuilder UseWordPress(this IApplicationBuilder app, string path = null)
         {
             // wordpress root path:
             if (path == null)
@@ -132,52 +147,65 @@ namespace Microsoft.AspNetCore.Builder
             // log exceptions:
             app.UseDiagnostic();
 
-            // plugins & configuration
-            plugins = new WpPluginContainer(plugins);
+            // load options
+            var options = new WordPressConfig()
+                .LoadFromSettings(app.ApplicationServices)      // appsettings.json
+                .LoadFromEnvironment(app.ApplicationServices)   // environment variables (known cloud hosts)
+                .LoadFromOptions(app.ApplicationServices)       // IConfigureOptions<WordPressConfig> service
+                .LoadDefaults();    // 
 
-            if (config == null)
-            {
-                config = WpConfigurationLoader
-                    .CreateDefault()
-                    .LoadFromSettings(app.ApplicationServices);
-            }
-
-            config.LoadFromEnvironment(app.ApplicationServices);
+            // list of plugins:
+            var plugins = new WpPluginContainer(options.PluginContainer);
 
             // response caching:
-            if (config.EnableResponseCaching)
+            if (options.EnableResponseCaching)
             {
                 // var cachepolicy = new WpResponseCachingPolicyProvider();
-                // var cachekey = app.ApplicationServices.GetService(typeof(WpResponseCachingKeyProvider));
-                
+                // var cachekey = app.ApplicationServices.GetService<WpResponseCachingKeyProvider>();
+
                 var cachepolicy = new WpResponseCachePolicy();
                 plugins.Add(cachepolicy);
 
                 // app.UseMiddleware<ResponseCachingMiddleware>(cachepolicy, cachekey);
-                app.UseMiddleware<WpResponseCacheMiddleware>(new MemoryCache(new MemoryCacheOptions{}), cachepolicy);
+                app.UseMiddleware<WpResponseCacheMiddleware>(new MemoryCache(new MemoryCacheOptions { }), cachepolicy);
             }
 
-            // update globals
-            WpStandard.DB_HOST = config.DbHost;
-            WpStandard.DB_NAME = config.DbName;
-            WpStandard.DB_PASSWORD = config.DbPassword;
-            WpStandard.DB_USER = config.DbUser;
+            // if (options.LegacyPluginAssemblies != null)
+            // {
+            //     options.LegacyPluginAssemblies.ForEach(name => Context.AddScriptReference(Assembly.Load(new AssemblyName(name))));
+            // }
 
-            //
-            var env = (IHostingEnvironment)app.ApplicationServices.GetService(typeof(IHostingEnvironment));
-            WpStandard.WP_DEBUG = config.Debug || env.IsDevelopment();
-
-            var wploader = new WpLoader(CompositionHelpers.GetPlugins(app.ApplicationServices).Concat(plugins.GetPlugins(app.ApplicationServices)));
+            var wploader = new WpLoader(plugins:
+                CompositionHelpers.GetPlugins(options.CompositionContainers.CreateContainer(), app.ApplicationServices, root)
+                .Concat(plugins.GetPlugins(app.ApplicationServices)));
 
             // url rewriting:
             app.UseRewriter(new RewriteOptions().Add(context => ShortUrlRule(context, fprovider)));
-            
+
+            // update globals used by WordPress:
+            WpStandard.DB_HOST = options.DbHost;
+            WpStandard.DB_NAME = options.DbName;
+            WpStandard.DB_PASSWORD = options.DbPassword;
+            WpStandard.DB_USER = options.DbUser;
+
+            //
+            var env = app.ApplicationServices.GetService<IHostingEnvironment>();
+            WpStandard.WP_DEBUG = options.Debug || env.IsDevelopment();
+
             // handling php files:
-            var startup = new Action<Context>(ctx => Apply(ctx, config, wploader));
+            var startup = new Action<Context>(ctx =>
+            {
+                Apply(ctx, options, wploader);
+            });
+
+            // app.UsePhp(
+            //     prefix: default, // NOTE: maybe we can handle only index.php and wp-admin/*.php ?
+            //     configureContext: startup,
+            //     rootPath: root);
 
             app.UsePhp(new PhpRequestOptions()
             {
-                ScriptAssembliesName = WordPressAssemblyName.ArrayConcat(config.LegacyPluginAssemblies),
+                ScriptAssembliesName = options.LegacyPluginAssemblies?.ToArray(),
                 BeforeRequest = startup,
                 RootPath = root,
             });
@@ -186,7 +214,7 @@ namespace Microsoft.AspNetCore.Builder
             app.UseStaticFiles(new StaticFileOptions() { FileProvider = fprovider });
 
             // fire wp-cron.php asynchronously
-            WpCronScheduler.StartScheduler(startup, TimeSpan.FromSeconds(60));
+            WpCronScheduler.StartScheduler(startup, TimeSpan.FromSeconds(60), root);
 
             //
             return app;
